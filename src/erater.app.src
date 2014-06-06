@@ -1,0 +1,8 @@
+%%% -*- mode: erlang -*-
+
+{application, erater, [
+        {description, "ERater: universal rate limiter"},
+        {id, "ERater"},
+        {applications, [kernel, stdlib, gproc]},
+        {mod, {erater, []}}
+        ]}.
