@@ -57,5 +57,5 @@ code_change(_, State, _) ->
 %%% Internals
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 save_config(Name, Config) ->
-    true = ets:insert(Name, [{rps, erater_config:rps(Config)}, {capacity, erater_config:capacity(Config)}]),
+    true = ets:insert(Name, erater_config:clean(Config)),
     ok.

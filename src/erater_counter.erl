@@ -65,20 +65,39 @@ get_time({_, Seconds, USeconds}, RPS) ->
         last_value,
         rps,
         epoch,          % Epoch for smaller counters, actually megaseconds from timestamp
-        max_value       % burst capacity
+        max_value,      % burst capacity
+        ttl,            % max time to live since last activity, slots
+        check_interval, % interval to check ttl, milliseconds
+        check_timer     % check timer ref
         }).
 
 init([Name, Config]) ->
+    RPS = erater_config:rps(Config),
+    MaxValue = erater_config:capacity(Config),
+    {TTL, CheckInterval} = case erater_config:die_after(Config) of
+        infinity ->
+            % Infinite lifetime, bad option, but possible
+            {infinity, undefined};
+        DieAfter when is_integer(DieAfter) ->
+            % TTL is (DieAfter ms)/(1000 ms/s)*(RPS slots/s)
+            % CheckInterval is DieAfter/10, but not less than 1 second
+            {(DieAfter*RPS) div 1000, max(DieAfter div 10, 1000)};
+        undefined ->
+            % By default, timer lives 100 times full replenish time (100*MaxValue slots)
+            {100*MaxValue, (10000*MaxValue) div RPS}
+    end,
     % Construct initial state
     State = #counter{
             name = Name,
             last_time = 0,
             last_value = 0,
-            rps = erater_config:rps(Config),
+            rps = RPS,
             epoch = epoch(),
-            max_value = erater_config:capacity(Config)
+            max_value = MaxValue,
+            ttl = TTL,
+            check_interval = CheckInterval
             },
-    {ok, State}.
+    {ok, set_check_timer(State)}.
 
 handle_call({schedule, _Epoch, BadRPS, _CurrentTime, _MaxTime}, _From, #counter{rps = RPS} = State) when BadRPS /= RPS ->
     {reply, {error, {rps_mismatch, RPS}}, State};
@@ -99,6 +118,11 @@ handle_call({schedule, _Epoch, _RPS, CurrentTime, MaxTime}, _From, #counter{last
 handle_cast(_, State) ->
     {noreply, State}.
 
+handle_info({timeout, Check, _}, #counter{check_timer = Check} = State) ->
+    {noreply, check_ttl(State)};
+handle_info({timeout, _WrongTimer, _}, #counter{} = State) ->
+    % Wrong timer event, ignore
+    {noreply, State};
 handle_info(_, State) ->
     {noreply, State}.
 
@@ -145,3 +169,30 @@ handle_schedule(_CurrentTime, _MaxTime, Time, Value, MaxValue) when Value < MaxV
 handle_schedule(_CurrentTime, _MaxTime, Time, Value, _MaxValue) ->
     % Counter time is up-to-date or in future, we cannot increment Value, so increment time
     {ok, Time + 1, Value}.
+
+
+% Set check timer when possible. Remember active timer in state
+set_check_timer(#counter{check_interval = CheckInterval} = State) when is_integer(CheckInterval) ->
+    % To avoid regular load spikes randomize interval a bit
+    MaxDevi = CheckInterval div 20,
+    RandomInterval = CheckInterval + random:uniform(2*MaxDevi) - MaxDevi,
+    Timer = erlang:start_timer(RandomInterval, self(), check),
+    State#counter{check_timer = Timer};
+set_check_timer(#counter{} = State) ->
+    State#counter{check_timer = undefined}.
+
+% Check if TTL exceeded
+check_ttl(#counter{epoch = Epoch, last_time = LastTime, rps = RPS, ttl = TTL} = State) ->
+    Timestamp = os:timestamp(),
+    Exceeded = (epoch(Timestamp) == Epoch) andalso (get_time(Timestamp, RPS) > LastTime + TTL),
+    case Exceeded of
+        true ->
+            % We don't die immediately to serve requests possibly in their way
+            % We deregister ourself and die in 1 second instead
+            catch gproc:goodbye(),
+            {ok, ExitTimer} = timer:exit_after(1000, shutdown),
+            State#counter{check_timer = {shutdown, ExitTimer}};
+        false ->
+            set_check_timer(State)
+    end.
+
