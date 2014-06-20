@@ -184,8 +184,8 @@ set_check_timer(#counter{} = State) ->
 % Check if TTL exceeded
 check_ttl(#counter{epoch = Epoch, last_time = LastTime, rps = RPS, ttl = TTL} = State) ->
     Timestamp = os:timestamp(),
-    Exceeded = (epoch(Timestamp) == Epoch) andalso (get_time(Timestamp, RPS) > LastTime + TTL),
-    case Exceeded of
+    SameEpochTime = get_time(Timestamp, RPS) + (epoch(Timestamp) - Epoch) * epoch_size(RPS),
+    case SameEpochTime > LastTime + TTL of
         true ->
             % We don't die immediately to serve requests possibly in their way
             % We deregister ourself and die in 1 second instead
