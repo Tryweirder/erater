@@ -3,7 +3,7 @@
 
 %% API
 -export([start_link/2]).
--export([name/2]).
+-export([name/2, whereis/2]).
 
 %% gen_server callbacks
 -export([init/1, terminate/2, code_change/3]).
@@ -19,8 +19,18 @@ start_link(Group, Config) ->
     end.
 
 % return global name for given group and shard
-name(Group, Shard) ->
+name(Group, Shard) when is_atom(Group), is_integer(Shard) ->
     {?MODULE, Group, Shard}.
+
+% Return a node hosting shard for given counter name
+whereis(Group, CounterName) when is_atom(Group), is_binary(CounterName) ->
+    case erater_group:get_config(Group, shards) of
+        undefined -> local;
+        Shards ->
+            Shard = (erlang:crc32(CounterName) rem Shards) + 1, % 1..Shards
+            ShardManager = global:whereis_name(name(Group, Shard)),
+            node(ShardManager)
+    end.
 
 -record(shard, {
         group, % erater group name

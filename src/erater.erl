@@ -10,7 +10,7 @@
 -export([start/2, stop/1]).
 
 % Internal API
--export([run_spawned_counter/2]).
+-export([run_spawned_counter/2, find_or_spawn/2]).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% Application
@@ -44,7 +44,12 @@ configure(Group, Config) when is_atom(Group) ->
 
 acquire(Group, CounterName, MaxWait) when is_atom(Group), is_integer(MaxWait) ->
     RPS = erater_group:get_config(Group, rps),
-    CounterPid = find_or_spawn(Group, CounterName),
+    CounterPid = case erater_shard:whereis(Group, CounterName) of
+        local ->
+            find_or_spawn(Group, CounterName);
+        Node when Node /= undefined ->
+            rpc:call(Node, ?MODULE, find_or_spawn, [Group, CounterName])
+    end,
     erater_counter:acquire(CounterPid, RPS, MaxWait).
 
 key(Group, CounterName) ->
