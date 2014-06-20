@@ -13,13 +13,13 @@ start_link(groups) ->
 add_group(Name, Options) when is_atom(Name) ->
     GroupSupParam = {group, Name, Options},
     SupRegName = list_to_atom(atom_to_list(Name) ++ "_sup"),
-    supervisor:start_child(erater_groups, [{local, SupRegName}, ?MODULE, GroupSupParam]).
+    GroupSpec = {Name,
+                 {supervisor, start_link, [{local, SupRegName}, ?MODULE, GroupSupParam]},
+                 transient, 1000, supervisor, []},
+    supervisor:start_child(erater_groups, GroupSpec).
 
 init(groups) ->
-    GroupSpec = {undefined,
-                 {supervisor, start_link, []},
-                 transient, 1000, supervisor, []},
-    {ok, {{simple_one_for_one, 5, 10}, [GroupSpec]}};
+    {ok, {{one_for_one, 5, 10}, []}};
 
 init({group, Name, Options}) ->
     Manager = {manager,

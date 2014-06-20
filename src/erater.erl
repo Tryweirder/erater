@@ -5,6 +5,7 @@
 -export([start/0]).
 -export([configure/2]).
 -export([acquire/3]).
+-export([groups/0, ngroups/0]).
 
 % Application calbacks
 -export([start/2, stop/1]).
@@ -31,6 +32,19 @@ start(_, _) ->
 stop(_) ->
     ok.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+groups() ->
+    [Group || {Group, _, _ ,_} <- supervisor:which_children(erater_groups)].
+
+groups(Node) ->
+    case rpc:call(Node, ?MODULE, groups, []) of
+        Groups when is_list(Groups) -> Groups;
+        _ -> []
+    end.
+
+ngroups() ->
+    AllNodes = [node()|nodes()],
+    lists:usort(lists:flatmap(fun groups/1, AllNodes)).
 
 
 configure(Group, Config) when is_atom(Group) ->
