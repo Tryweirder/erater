@@ -3,7 +3,7 @@
 
 %% API
 -export([start_link/2]).
--export([name/2, whereis/2]).
+-export([name/2, whereis/2, map/1]).
 
 %% gen_server callbacks
 -export([init/1, terminate/2, code_change/3]).
@@ -28,9 +28,21 @@ whereis(Group, CounterName) when is_atom(Group), is_binary(CounterName) ->
         undefined -> local;
         Shards ->
             Shard = (erlang:crc32(CounterName) rem Shards) + 1, % 1..Shards
-            ShardManager = global:whereis_name(name(Group, Shard)),
-            node(ShardManager)
+            shard_node(Group, Shard)
     end.
+
+% Returns map of [{Shard::integer(), Node::node()}]
+map(Group) ->
+    case erater_group:get_config(Group, shards) of
+        undefined ->
+            undefined;
+        Shards ->
+            [{Shard, shard_node(Group, Shard)} || Shard <- lists:seq(1, Shards)]
+    end.
+
+shard_node(Group, Shard) ->
+    ShardManager = global:whereis_name(name(Group, Shard)),
+    node(ShardManager).
 
 -record(shard, {
         group, % erater group name
