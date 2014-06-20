@@ -10,7 +10,7 @@
 -export([handle_call/3, handle_cast/2, handle_info/2]).
 
 start_link(Group, Config) ->
-    case proplists:get_value(shards, Config) of
+    case erater_config:shards(Config) of
         undefined ->
             ignore;
         Shards when is_integer(Shards) ->
