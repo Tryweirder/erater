@@ -41,8 +41,12 @@ map(Group) ->
     end.
 
 shard_node(Group, Shard) ->
-    ShardManager = global:whereis_name(name(Group, Shard)),
-    node(ShardManager).
+    case global:whereis_name(name(Group, Shard)) of
+        undefined ->
+            undefined;
+        ShardManager ->
+            node(ShardManager)
+    end.
 
 -record(shard, {
         group, % erater group name
