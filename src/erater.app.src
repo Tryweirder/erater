@@ -7,5 +7,5 @@
         {applications, [kernel, stdlib, gproc]},
         {modules, []},
         {mod, {erater, []}},
-        {registered, [erater_groups]}
+        {registered, [erater_sup]}
         ]}.

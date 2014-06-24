@@ -1,26 +1,49 @@
 -module(erater_sup).
 -behavior(supervisor).
 
--export([start_link/0, add_group/2]).
+-export([start_link/0, start_link/1, add_group/2]).
 -export([init/1]).
 
+%% Supervisors local registration names
+regname(root) ->
+    erater_sup;
+regname(groups) ->
+    erater_groups;
+regname({group, Name, _}) ->
+    list_to_atom(atom_to_list(Name) ++ "_sup").
+
+%% By default start root supervisor
 start_link() ->
-    start_link(groups).
+    start_link(root).
 
-start_link(groups) ->
-    supervisor:start_link({local, erater_groups}, ?MODULE, groups).
+%% Generic start function
+start_link(Param) ->
+    supervisor:start_link({local, regname(Param)}, ?MODULE, Param).
 
+
+%% Start new group in groups supervisor
 add_group(Name, Options) when is_atom(Name) ->
-    GroupSupParam = {group, Name, Options},
-    SupRegName = list_to_atom(atom_to_list(Name) ++ "_sup"),
     GroupSpec = {Name,
-                 {supervisor, start_link, [{local, SupRegName}, ?MODULE, GroupSupParam]},
+                 {?MODULE, start_link, [{group, Name, Options}]},
                  transient, 1000, supervisor, []},
     supervisor:start_child(erater_groups, GroupSpec).
 
+
+%% Root supervisor init
+init(root) ->
+    Groups = {groups,
+              {?MODULE, start_link, [groups]},
+              permanent, 1000, supervisor, []},
+    Pinger = {pinger,
+              {erater_pinger, start_link, []},
+              permanent, 1000, worker, [erater_pinger]},
+    {ok, {{one_for_one, 5, 10}, [Groups, Pinger]}};
+
+%% Groups supervisor is empty on start
 init(groups) ->
     {ok, {{one_for_one, 5, 10}, []}};
 
+%% Each group is supervisor itself
 init({group, Name, Options}) ->
     Manager = {manager,
                  {erater_group, start_link, [Name, Options]},
