@@ -2,7 +2,7 @@
 -behavior(gen_server).
 
 -export([start_link/2, run/2]).
--export([acquire/3]).
+-export([acquire/3, async_acquire/4]).
 
 -export([init/1, terminate/2, code_change/3]).
 -export([handle_call/3, handle_cast/2, handle_info/2]).
@@ -39,6 +39,14 @@ acquire(Counter, RPS, MaxWait) ->
             acquire(Counter, ServerRPS, MaxWait)
     end.
 
+async_acquire(Counter, RPS, MaxWait, {Pid, _Ref} = ReturnPath) when is_pid(Pid) ->
+    Timestamp = os:timestamp(),
+    Time = get_time(Timestamp, RPS),
+    SlotMillis = 1000 div RPS,
+    MaxWaitSlots = MaxWait div SlotMillis,
+    MaxTime = Time + MaxWaitSlots,
+
+    Counter ! {schedule, epoch(Timestamp), RPS, Time, MaxTime, ReturnPath}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%  Helpers
@@ -118,6 +126,14 @@ handle_call({schedule, _Epoch, _RPS, CurrentTime, MaxTime}, _From, #counter{last
 handle_cast(_, State) ->
     {noreply, State}.
 
+handle_info({schedule, Epoch, RPS, Time, MaxTime, {Pid, Ref} = ReturnPath}, #counter{} = State) ->
+    case handle_call({schedule, Epoch, RPS, Time, MaxTime}, ReturnPath, State) of
+        {reply, Response, NextState} ->
+            Pid ! {erater_response, Ref, Response},
+            {noreply, NextState};
+        {noreply, NextState} ->
+            {noreply, NextState}
+    end;
 handle_info({timeout, Check, _}, #counter{check_timer = Check} = State) ->
     {noreply, check_ttl(State)};
 handle_info({timeout, _WrongTimer, _}, #counter{} = State) ->

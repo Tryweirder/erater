@@ -3,7 +3,7 @@
 
 %% API
 -export([start_link/2]).
--export([name/2, whereis/2, map/1]).
+-export([name/2, shard/2, whereis/2, map/1]).
 
 %% gen_server callbacks
 -export([init/1, terminate/2, code_change/3]).
@@ -24,11 +24,18 @@ name(Group, Shard) when is_atom(Group), is_integer(Shard) ->
 
 % Return a node hosting shard for given counter name
 whereis(Group, CounterName) when is_atom(Group), is_binary(CounterName) ->
-    case erater_group:get_config(Group, shards) of
+    case shard(Group, CounterName) of
         undefined -> local;
+        Shard -> shard_node(Group, Shard)
+    end.
+
+% Determine shard number for given counter
+shard(Group, CounterName) ->
+    case erater_group:get_config(Group, shards) of
+        undefined ->
+            undefined;
         Shards ->
-            Shard = (erlang:crc32(CounterName) rem Shards) + 1, % 1..Shards
-            shard_node(Group, Shard)
+            (erlang:crc32(CounterName) rem Shards) + 1 % 1..Shards
     end.
 
 % Returns map of [{Shard::integer(), Node::node()}]

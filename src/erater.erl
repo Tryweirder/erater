@@ -4,7 +4,7 @@
 % API
 -export([start/0]).
 -export([configure/2]).
--export([acquire/3, local_acquire/3]).
+-export([acquire/3, local_acquire/3, local_async_acquire/4]).
 -export([groups/0, ngroups/0]).
 
 % Application calbacks
@@ -68,6 +68,11 @@ local_acquire(Group, CounterName, MaxWait) ->
     CounterPid = find_or_spawn(Group, CounterName),
     RPS = erater_group:get_config(Group, rps),
     erater_counter:acquire(CounterPid, RPS, MaxWait).
+
+local_async_acquire(Group, CounterName, MaxWait, ReturnPath) ->
+    CounterPid = find_or_spawn(Group, CounterName),
+    RPS = erater_group:get_config(Group, rps),
+    erater_counter:async_acquire(CounterPid, RPS, MaxWait, ReturnPath).
 
 key(Group, CounterName) ->
     {n, l, {Group, CounterName}}.
