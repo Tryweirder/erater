@@ -4,7 +4,7 @@
 % API
 -export([start/0]).
 -export([configure/2]).
--export([acquire/3]).
+-export([acquire/3, local_acquire/3]).
 -export([groups/0, ngroups/0]).
 
 % Application calbacks
@@ -57,13 +57,16 @@ configure(Group, Config) when is_atom(Group) ->
     end.
 
 acquire(Group, CounterName, MaxWait) when is_atom(Group), is_integer(MaxWait) ->
-    RPS = erater_group:get_config(Group, rps),
-    CounterPid = case erater_shard:whereis(Group, CounterName) of
+    case erater_shard:whereis(Group, CounterName) of
         local ->
-            find_or_spawn(Group, CounterName);
+            local_acquire(Group, CounterName, MaxWait);
         Node when Node /= undefined ->
-            rpc:call(Node, ?MODULE, find_or_spawn, [Group, CounterName])
-    end,
+            rpc:call(Node, ?MODULE, local_acquire, [Group, CounterName, MaxWait])
+    end.
+
+local_acquire(Group, CounterName, MaxWait) ->
+    CounterPid = find_or_spawn(Group, CounterName),
+    RPS = erater_group:get_config(Group, rps),
     erater_counter:acquire(CounterPid, RPS, MaxWait).
 
 key(Group, CounterName) ->
