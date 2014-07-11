@@ -40,6 +40,11 @@ acquire(Counter, RPS, MaxWait) ->
     end.
 
 async_acquire(Counter, RPS, MaxWait, {Pid, _Ref} = ReturnPath) when is_pid(Pid) ->
+    do_async_acquire(Counter, RPS, MaxWait, ReturnPath);
+async_acquire(Counter, RPS, MaxWait, {mfa, _, _, _} = ReturnPath) ->
+    do_async_acquire(Counter, RPS, MaxWait, ReturnPath).
+
+do_async_acquire(Counter, RPS, MaxWait, ReturnPath) ->
     Timestamp = os:timestamp(),
     Time = get_time(Timestamp, RPS),
     SlotMillis = 1000 div RPS,
@@ -126,10 +131,18 @@ handle_call({schedule, _Epoch, _RPS, CurrentTime, MaxTime}, _From, #counter{last
 handle_cast(_, State) ->
     {noreply, State}.
 
-handle_info({schedule, Epoch, RPS, Time, MaxTime, {Pid, Ref} = ReturnPath}, #counter{} = State) ->
+handle_info({schedule, Epoch, RPS, Time, MaxTime, {Pid, Ref} = ReturnPath}, #counter{} = State) when is_pid(Pid) ->
     case handle_call({schedule, Epoch, RPS, Time, MaxTime}, ReturnPath, State) of
         {reply, Response, NextState} ->
             Pid ! {erater_response, Ref, Response},
+            {noreply, NextState};
+        {noreply, NextState} ->
+            {noreply, NextState}
+    end;
+handle_info({schedule, Epoch, RPS, Time, MaxTime, {mfa, Mod, Fun, Args}}, #counter{} = State) ->
+    case handle_call({schedule, Epoch, RPS, Time, MaxTime}, {undefined, undefined}, State) of
+        {reply, Response, NextState} ->
+            erlang:apply(Mod, Fun, [Response|Args]),
             {noreply, NextState};
         {noreply, NextState} ->
             {noreply, NextState}
