@@ -1,6 +1,6 @@
 -module(erater_config).
 -export([validate/1, clean/1]).
--export([rps/1, capacity/1, die_after/1, shards/1]).
+-export([driver/1, rps/1, capacity/1, die_after/1, shards/1]).
 
 
 validate(Config) when is_list(Config) ->
@@ -14,12 +14,16 @@ validate(Config) when is_list(Config) ->
 
 clean(Config) ->
     [
+        {driver, driver(Config)},
         {rps, rps(Config)},
         {capacity, capacity(Config)},
         {die_after, die_after(Config)},
         {shards, shards(Config)}
         ].
 
+
+driver(Config) ->
+    proplists:get_value(driver, Config, erater_group).
 
 rps(Config) ->
     proplists:get_value(rps, Config, 1).

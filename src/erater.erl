@@ -10,9 +10,6 @@
 % Application calbacks
 -export([start/2, stop/1]).
 
-% Internal API
--export([run_spawned_counter/2, find_or_spawn/2]).
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% Application
 start() ->
@@ -60,38 +57,17 @@ acquire(Group, CounterName, MaxWait) when is_atom(Group), is_integer(MaxWait) ->
     case erater_shard:whereis(Group, CounterName) of
         local ->
             local_acquire(Group, CounterName, MaxWait);
-        Node when Node /= undefined ->
+        undefined ->
+            {error, unavailable};
+        Node ->
             rpc:call(Node, ?MODULE, local_acquire, [Group, CounterName, MaxWait])
     end.
 
 local_acquire(Group, CounterName, MaxWait) ->
-    CounterPid = find_or_spawn(Group, CounterName),
-    RPS = erater_group:get_config(Group, rps),
-    erater_counter:acquire(CounterPid, RPS, MaxWait).
+    Driver = erater_group:get_config(Group, driver),
+    Driver:acquire(Group, CounterName, MaxWait).
 
 local_async_acquire(Group, CounterName, MaxWait, ReturnPath) ->
-    CounterPid = find_or_spawn(Group, CounterName),
-    RPS = erater_group:get_config(Group, rps),
-    erater_counter:async_acquire(CounterPid, RPS, MaxWait, ReturnPath).
+    Driver = erater_group:get_config(Group, driver),
+    Driver:async_acquire(Group, CounterName, MaxWait, ReturnPath).
 
-key(Group, CounterName) ->
-    {n, l, {Group, CounterName}}.
-
-find_or_spawn(Group, CounterName) ->
-    Key = key(Group, CounterName),
-    case gproc:where(Key) of
-        CounterPid when is_pid(CounterPid) ->
-            CounterPid;
-        undefined ->
-            {CounterPid, _} = gproc:reg_or_locate(Key, true, fun() -> ?MODULE:run_spawned_counter(Group, CounterName) end),
-            CounterPid
-    end.
-
-% Hack: proc_lib internals are used here
-run_spawned_counter(Group, CounterName) ->
-    {dictionary, ParentDict} = process_info(whereis(Group), dictionary),
-    Config = erater_group:get_config(Group),
-    Parent = Group,
-    Ancestors = proplists:get_value('$ancestors', ParentDict, []),
-
-    proc_lib:init_p(Parent, Ancestors, erater_counter, run, [CounterName, Config]).

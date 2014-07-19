@@ -3,9 +3,14 @@
 
 -export([start_link/2]).
 -export([configure/2, get_config/1, get_config/2, status/1]).
+-export([acquire/3, async_acquire/4]).
 
 -export([init/1, terminate/2, code_change/3]).
 -export([handle_call/3, handle_cast/2, handle_info/2]).
+
+% Internal API
+-export([run_spawned_counter/2, find_or_spawn/2]).
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% API
@@ -24,6 +29,16 @@ get_config(Group, Key) ->
 
 status(Group) when is_atom(Group) ->
     get_group_status(Group).
+
+acquire(Group, CounterName, MaxWait) when is_atom(Group), is_integer(MaxWait) ->
+    CounterPid = find_or_spawn(Group, CounterName),
+    RPS = erater_group:get_config(Group, rps),
+    erater_counter:acquire(CounterPid, RPS, MaxWait).
+
+async_acquire(Group, CounterName, MaxWait, ReturnPath) ->
+    CounterPid = find_or_spawn(Group, CounterName),
+    RPS = erater_group:get_config(Group, rps),
+    erater_counter:async_acquire(CounterPid, RPS, MaxWait, ReturnPath).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% gen_server
@@ -76,3 +91,27 @@ node_has_group(Node, Group) ->
         undefined -> false;
         Shards when is_integer(Shards) -> true
     end.
+
+
+
+key(Group, CounterName) ->
+    {n, l, {Group, CounterName}}.
+
+find_or_spawn(Group, CounterName) ->
+    Key = key(Group, CounterName),
+    case gproc:where(Key) of
+        CounterPid when is_pid(CounterPid) ->
+            CounterPid;
+        undefined ->
+            {CounterPid, _} = gproc:reg_or_locate(Key, true, fun() -> ?MODULE:run_spawned_counter(Group, CounterName) end),
+            CounterPid
+    end.
+
+% Hack: proc_lib internals are used here
+run_spawned_counter(Group, CounterName) ->
+    {dictionary, ParentDict} = process_info(whereis(Group), dictionary),
+    Config = erater_group:get_config(Group),
+    Parent = Group,
+    Ancestors = proplists:get_value('$ancestors', ParentDict, []),
+
+    proc_lib:init_p(Parent, Ancestors, erater_counter, run, [CounterName, Config]).

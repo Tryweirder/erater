@@ -50,12 +50,13 @@ init(groups) ->
 
 %% Each group is supervisor itself
 init({group, Name, Options}) ->
+    Driver = erater_config:driver(Options),
     Manager = {manager,
-                 {erater_group, start_link, [Name, Options]},
-                 transient, 1000, worker, [erater_group]},
+                 {Driver, start_link, [Name, Options]},
+                 transient, 1000, worker, [Driver]},
     Shard = {shard,
                  {erater_shard, start_link, [Name, Options]},
-                 transient, 1000, worker, [erater_group]},
+                 transient, 1000, worker, [erater_shard]},
     ProxySup = {proxies,
                 {?MODULE, start_link, [{proxies, Name}]},
                 permanent, 1000, supervisor, []},
