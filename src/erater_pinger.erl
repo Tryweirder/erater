@@ -7,6 +7,8 @@
 -export([init/1, terminate/2, code_change/3]).
 -export([handle_call/3, handle_cast/2, handle_info/2]).
 
+-export([nodes_to_ping/0]).
+
 start_link() ->
     case nodes_to_ping() of
         [] ->
@@ -52,7 +54,7 @@ code_change(_, State, _) ->
 %%% Internals
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 nodes_to_ping() ->
-    lists:flatmap(fun get_nodes_from_param/1, [sync_nodes_mandatory, sync_nodes_optional]).
+    lists:usort(lists:flatmap(fun get_nodes_from_param/1, [sync_nodes_mandatory, sync_nodes_optional])).
 
 get_nodes_from_param(ParamName) ->
     case application:get_env(kernel, ParamName) of
