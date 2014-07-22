@@ -1,6 +1,6 @@
 -module(erater_ets).
 -export([start_link/2, init/2, master/2, time_server/2]).
--export([acquire/3]).
+-export([acquire/3, async_acquire/4]).
 
 -export([global_time/1, global_time/2]).
 
@@ -14,7 +14,7 @@ start_link_time_server(Group, Config) ->
 init(Group, Config) ->
     ets:new(Group, [named_table, public, set, {read_concurrency, true}, {write_concurrency, true}]),
     LockTable = list_to_atom(atom_to_list(Group) ++ "_locks"),
-    ets:new(LockTable, [named_table, public, bag, {read_concurrency, true}, {write_concurrency, true}]),
+    ets:new(LockTable, [named_table, public, bag, {read_concurrency, false}, {write_concurrency, false}]),
     CleanConfig = erater_config:clean(Config),
     RPS = erater_config:rps(CleanConfig),
     SlotMillis = 1000 div RPS,
@@ -78,11 +78,29 @@ slot_millis(Group) ->
 make_counter(Name, Time, Value) ->
     {Name, Time, Value}.
 
+% Asynchronous acquiring should be implemented using worker pool
+% For first tests just simulate async
+async_acquire(Group, Name, MaxWait, {Pid, Ref}) ->
+    Response = acquire(Group, Name, MaxWait),
+    Pid ! {erater_response, Ref, Response}.
+
 acquire(Group, Name, MaxWait) ->
     LockTable = lock_table(Group),
-    LockResult = gain_lock(LockTable, Name),
+    try
+        LockResult = gain_lock(LockTable, Name),
+        {GoodResponse, NewCounter} = perform_acquire(LockResult, Group, Name, MaxWait),
+        giveaway_lock(LockTable, Name, NewCounter),
+        GoodResponse
+    catch
+        Class:Reason ->
+            true = ets:delete_object(LockTable, {Name, self()}),
+            {error, {Class, Reason, erlang:get_stacktrace()}}
+    end.
+
+perform_acquire(LockResult, Group, Name, MaxWait) ->
     Counter = case LockResult of
         ok -> get_counter(Group, Name);
+        {forced, _} -> get_counter(Group, Name);
         {ok, Inherited} -> Inherited
     end,
     Time = global_time(Group),
@@ -90,13 +108,14 @@ acquire(Group, Name, MaxWait) ->
     MaxTime = Time + MaxWait div SlotMillis,
     MaxValue = max_value(Group),
     {Response, NewCounter} = update_counter(Group, Counter, Time, MaxTime, MaxValue),
-    giveaway_lock(LockTable, Name, NewCounter),
-    case Response of
+    ExtResponse = case Response of
         {ok, SlotsToWait} ->
             {ok, SlotsToWait * SlotMillis};
         {error, _} = Error ->
             Error
-    end.
+    end,
+    {ExtResponse, NewCounter}.
+
 
 get_counter(Group, Name) ->
     case ets:lookup(Group, Name) of
