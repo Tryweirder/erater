@@ -3,7 +3,7 @@
 {application, erater, [
         {description, "ERater: universal rate limiter"},
         {id, "ERater"},
-        {vsn, "0.1"},
+        {vsn, "0.5"},
         {applications, [kernel, stdlib, gproc]},
         {modules, []},
         {mod, {erater, []}},
