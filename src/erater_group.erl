@@ -3,6 +3,7 @@
 
 -export([start_link/2]).
 -export([configure/2, get_config/1, get_config/2, status/1]).
+-export([set_clock/2, get_clock/1]).
 -export([acquire/3, async_acquire/4]).
 
 -export([init/1, terminate/2, code_change/3]).
@@ -29,6 +30,15 @@ get_config(Group, Key) ->
 
 status(Group) when is_atom(Group) ->
     get_group_status(Group).
+
+
+set_clock(Group, Clock) when is_tuple(Clock), element(1, Clock) == clock ->
+    ets:insert(Group, Clock).
+
+get_clock(Group) ->
+    [Clock] = ets:lookup(Group, clock),
+    Clock.
+
 
 acquire(Group, CounterName, MaxWait) when is_atom(Group), is_integer(MaxWait) ->
     CounterPid = find_or_spawn(Group, CounterName),
