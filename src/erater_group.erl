@@ -42,13 +42,11 @@ get_clock(Group) ->
 
 acquire(Group, CounterName, MaxWait) when is_atom(Group), is_integer(MaxWait) ->
     CounterPid = find_or_spawn(Group, CounterName),
-    RPS = erater_group:get_config(Group, rps),
-    erater_counter:acquire(CounterPid, RPS, MaxWait).
+    erater_counter:acquire(CounterPid, MaxWait).
 
 async_acquire(Group, CounterName, MaxWait, ReturnPath) ->
     CounterPid = find_or_spawn(Group, CounterName),
-    RPS = erater_group:get_config(Group, rps),
-    erater_counter:async_acquire(CounterPid, RPS, MaxWait, ReturnPath).
+    erater_counter:async_acquire(CounterPid, MaxWait, ReturnPath).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% gen_server
@@ -124,4 +122,4 @@ run_spawned_counter(Group, CounterName) ->
     Parent = Group,
     Ancestors = proplists:get_value('$ancestors', ParentDict, []),
 
-    proc_lib:init_p(Parent, Ancestors, erater_counter, run, [CounterName, Config]).
+    proc_lib:init_p(Parent, Ancestors, erater_counter, run, [Group, CounterName, Config]).
