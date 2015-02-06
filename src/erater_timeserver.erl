@@ -13,7 +13,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% API
--export([start_link/2, set_rate/2, get_time/1]).
+-export([start_link/2, set_rate/2, get_time/1, get_time_range/2, get_time_range_tickms/2]).
 
 
 %% gen_server callbacks
@@ -37,19 +37,29 @@ get_time(Group) when is_atom(Group) ->
     Clock = erater_group:get_clock(Group),
     clock_to_time(Clock).
 
+get_time_range(Group, MaxWait) when is_atom(Group) ->
+    Clock = erater_group:get_clock(Group),
+    clock_to_time_range(Clock, MaxWait).
+
+get_time_range_tickms(Group, MaxWait) when is_atom(Group) ->
+    Clock = erater_group:get_clock(Group),
+    clock_to_time_range_tickms(Clock, MaxWait).
+
 
 %%%
 %%% Internals
 %%%
 -record(clock, {
         time :: integer(),
-        next_timestamp :: erlang:timestamp()
+        next_timestamp :: erlang:timestamp(),
+        tick_ms :: integer()
         }).
 
 -record(timeserver, {
         group :: atom(),            % Group name
         rps :: number(),            % Configured RPS
         tick_us :: integer(),       % microseconds between ticks
+        tick_ms :: integer(),       % milliseconds between ticks
 
         ref_timestamp :: erlang:timestamp(),     % reference timstamp for calculating absolute clock values
         ref_time :: integer(),      % time at reference point
@@ -66,6 +76,7 @@ init([Group, RPS]) ->
             group = Group,
             rps = RPS,
             tick_us = Tick_us,
+            tick_ms = Tick_us div 1000,
 
             ref_timestamp = Timestamp,
             ref_time = 1,
@@ -121,8 +132,8 @@ maybe_update_clock(Timestamp, #timeserver{ref_timestamp = RefTS, ref_time = RefT
     {NextTSRel div 1000, store_clock(NewState)}.
 
 
-store_clock(#timeserver{group = Group, last_time = CurrentTime, next_timestamp = NextTS} = State) ->
-    Clock = #clock{time = CurrentTime, next_timestamp = NextTS},
+store_clock(#timeserver{group = Group, last_time = CurrentTime, next_timestamp = NextTS, tick_ms = Tick_ms} = State) ->
+    Clock = #clock{time = CurrentTime, next_timestamp = NextTS, tick_ms = Tick_ms},
     erater_group:set_clock(Group, Clock),
     State.
 
@@ -131,6 +142,14 @@ clock_to_time(#clock{time = Time, next_timestamp = NextTS}) ->
         true -> Time + 1;
         false -> Time
     end.
+
+clock_to_time_range(#clock{tick_ms = Tick_ms} = Clock, MaxWait) ->
+    Time = clock_to_time(Clock),
+    {Time, Time + (MaxWait div Tick_ms)}.
+
+clock_to_time_range_tickms(#clock{tick_ms = Tick_ms} = Clock, MaxWait) ->
+    Time = clock_to_time(Clock),
+    {Time, Time + (MaxWait div Tick_ms), Tick_ms}.
 
 
 now_add({Mega, Sec, Micro}, AddMicro) ->
