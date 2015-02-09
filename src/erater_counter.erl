@@ -49,18 +49,20 @@ do_async_acquire(Counter, MaxWait, ReturnPath) ->
         }).
 
 init([Group, Name, Config]) ->
-    MaxValue = erater_config:capacity(Config),
-    TTL = erater_config:die_after(Config),
+    put(erater_counter, {Group, Name}),
     % Construct initial state
-    State = #counter{
+    State0 = #counter{
             group = Group,
             name = Name,
             last_time = 0,
-            last_value = 0,
-            max_value = MaxValue,
-            ttl = TTL
+            last_value = 0
             },
+    State = #counter{ttl = TTL} = set_config(Config, State0),
     {ok, State, TTL}.
+
+
+handle_call({set_config, Config}, _From, #counter{} = State) ->
+    reply_ttl(ok, set_config(Config, State));
 
 handle_call({schedule, MaxWait}, _From, #counter{group = Group, last_time = Time, last_value = Value, max_value = MaxValue} = State) ->
     {CurrentTime, MaxTime, Tick_ms} = erater_timeserver:get_time_range_tickms(Group, MaxWait),
@@ -109,6 +111,14 @@ code_change(_, State, _) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%  Internals
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+set_config(Config, #counter{} = State) ->
+    MaxValue = erater_config:capacity(Config),
+    TTL = erater_config:die_after(Config),
+    % Construct initial state
+    State#counter{
+        max_value = MaxValue,
+        ttl = TTL
+        }.
 
 %% @doc Counter extrapolation and update
 %% Counter is stored as pair (Time, Value)
