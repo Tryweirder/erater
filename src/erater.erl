@@ -49,8 +49,8 @@ configure(Group, Config) when is_atom(Group) ->
     case erater_sup:add_group(Group, Config) of
         {ok, _Pid} ->
             ok;
-        {error,{already_started,Pid}} ->
-            erater_group:configure(Pid, Config)
+        {error,{already_started,_Pid}} ->
+            erater_group:configure(Group, Config)
     end.
 
 acquire(Group, CounterName, MaxWait) when is_atom(Group), is_integer(MaxWait) ->
