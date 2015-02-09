@@ -13,7 +13,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% API
--export([start_link/2, set_rate/2, get_time/1, get_time_range/2, get_time_range_tickms/2]).
+-export([start_link/2, get_time/1, get_time_range/2, get_time_range_tickms/2]).
 
 
 %% gen_server callbacks
@@ -29,9 +29,6 @@ start_link(Group, RPS) when is_atom(Group), is_number(RPS) ->
     gen_server:start_link({local, RegName}, ?MODULE, [Group, RPS], []);
 start_link(Group, Config) when is_atom(Group) ->
     start_link(Group, erater_config:rps(Config)).
-
-set_rate(Group, RPS) when is_atom(Group), is_number(RPS) ->
-    {error, not_implemented}.
 
 get_time(Group) when is_atom(Group) ->
     Clock = erater_group:get_clock(Group),
@@ -68,23 +65,18 @@ get_time_range_tickms(Group, MaxWait) when is_atom(Group) ->
         next_timestamp :: erlang:timestamp()     % when time should be incremented
         }).
 
-
+%%%
+%%% gen_server callback implementations
+%%%
 init([Group, RPS]) ->
-    Tick_us = round(1000000/RPS),
     Timestamp = os:timestamp(),
     State0 = #timeserver{
             group = Group,
-            rps = RPS,
-            tick_us = Tick_us,
-            tick_ms = Tick_us div 1000,
-
-            ref_timestamp = Timestamp,
-            ref_time = 1,
-
-            last_time = undefined,
-            next_timestamp = undefined
+            last_time = 0,
+            next_timestamp = Timestamp
             },
-    {NextTick, State} = sync_clock(State0),
+    State1 = change_rps(RPS, State0),
+    {NextTick, State} = sync_clock(State1),
     {ok, State, NextTick}.
 
 handle_call(_, _, State) ->
@@ -104,7 +96,7 @@ terminate(_, _) ->
 code_change(_, #timeserver{} = State, _) ->
     {ok, State}.
 
-
+%% Helpers to not miss setting timeout in return value
 update_and_reply(Reply, State) ->
     {NextTick, State1} = sync_clock(State),
     {reply, Reply, State1, NextTick}.
@@ -114,9 +106,34 @@ update_noreply(State) ->
     {noreply, State1, NextTick}.
 
 
+%%%
+%%% State management logic
+%%%
 
+%% Change RPS. This is used for re-seeding reference point to continue without clock jumps
+change_rps(RPS, #timeserver{last_time = CurrentTime, next_timestamp = {_, _, _} = NextTS} = State) when is_integer(CurrentTime) ->
+    Tick_us = round(1000000/RPS),
+    State#timeserver{
+        % Set RPS-dependent things
+        rps = RPS,
+        tick_us = Tick_us,
+        tick_ms = Tick_us div 1000,
+
+        % Keep time going seamlessly
+        ref_timestamp = NextTS,
+        ref_time = CurrentTime + 1
+        }.
+
+%% Make sure saved clock is up-to-date
 sync_clock(#timeserver{} = State) ->
-    maybe_update_clock(os:timestamp(), State).
+    State1 = update_config(State),
+    maybe_update_clock(os:timestamp(), State1).
+
+update_config(#timeserver{group = Group, rps = RPS} = State) ->
+    case erater_group:get_config(Group, rps) of
+        RPS -> State; % No update needed
+        NewRPS -> change_rps(NewRPS, State)
+    end.
 
 maybe_update_clock(Timestamp, #timeserver{next_timestamp = {_, _, _} = NextTS} = State)
         when Timestamp < NextTS ->
