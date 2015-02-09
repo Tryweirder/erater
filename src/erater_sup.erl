@@ -1,7 +1,7 @@
 -module(erater_sup).
 -behavior(supervisor).
 
--export([start_link/0, start_link/1, add_group/2, add_proxy/2]).
+-export([start_link/0, start_link/1, add_group/2, add_proxy/2, start_configurator/2, get_configurator/1]).
 -export([init/1]).
 
 %% Supervisors local registration names
@@ -33,6 +33,30 @@ add_group(Name, Options) when is_atom(Name) ->
 add_proxy(Group, Pair) ->
     supervisor:start_child(regname({proxies, Group}), [Group, Pair]).
 
+
+%% Start group configurator under group supervisor
+start_configurator(Group, Config) ->
+    Sup = regname({group, Group, []}),
+    ConfiguratorSpec = {configurator,
+                 {erater_configurator, start_link, [Group, Config]},
+                 transient, 100, worker, [erater_configurator]},
+    StartResult = supervisor:start_child(Sup, ConfiguratorSpec),
+    case StartResult of
+        {error, already_present} -> % Transient child spec is not removed on death, so do it when needed
+            ok = supervisor:delete_child(Sup, configurator),
+            start_configurator(Group, Config);
+        _ ->
+            StartResult
+    end.
+
+%% If configurator is already running, return its pid. Return undefined otherwise
+get_configurator(Group) when is_atom(Group) ->
+    Sup = regname({group, Group, []}),
+    ConfPids = [Pid || {configurator, Pid, _, _} <- supervisor:which_children(Sup)],
+    case ConfPids of
+        [Pid] -> Pid;
+        [] -> undefined
+    end.
 
 %% Root supervisor init
 init(root) ->

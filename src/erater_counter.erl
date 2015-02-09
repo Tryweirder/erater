@@ -7,6 +7,8 @@
 -export([init/1, terminate/2, code_change/3]).
 -export([handle_call/3, handle_cast/2, handle_info/2]).
 
+-export([set_config/2, set_config/3]).
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%  API
@@ -35,6 +37,18 @@ async_acquire(Counter, MaxWait, {mfa, _, _, _} = ReturnPath) ->
 do_async_acquire(Counter, MaxWait, ReturnPath) ->
     Counter ! {schedule, MaxWait, ReturnPath}.
 
+%% On-the-fly counter reconfiguration
+set_config(Counter, Config) ->
+    set_config(Counter, Config, sync).
+
+set_config(Counter, Config, sync) ->
+    set_config(Counter, Config, 5000);
+set_config(Counter, Config, Timeout) when is_integer(Timeout) ->
+    gen_server:call(Counter, {set_config, Config}, Timeout);
+set_config(Counter, Config, async) ->
+    Counter ! {set_config, Config},
+    ok.
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%  gen_server callbacks
@@ -57,12 +71,12 @@ init([Group, Name, Config]) ->
             last_time = 0,
             last_value = 0
             },
-    State = #counter{ttl = TTL} = set_config(Config, State0),
+    State = #counter{ttl = TTL} = do_set_config(Config, State0),
     {ok, State, TTL}.
 
 
 handle_call({set_config, Config}, _From, #counter{} = State) ->
-    reply_ttl(ok, set_config(Config, State));
+    reply_ttl(ok, do_set_config(Config, State));
 
 handle_call({schedule, MaxWait}, _From, #counter{group = Group, last_time = Time, last_value = Value, max_value = MaxValue} = State) ->
     {CurrentTime, MaxTime, Tick_ms} = erater_timeserver:get_time_range_tickms(Group, MaxWait),
@@ -88,6 +102,9 @@ handle_info({schedule, MaxWait, {mfa, Mod, Fun, Args}}, #counter{} = State) ->
     erlang:apply(Mod, Fun, [Response|Args]),
     noreply_ttl(NextState);
 
+handle_info({set_config, Config}, #counter{} = State) ->
+    noreply_ttl(do_set_config(Config, State));
+
 handle_info(timeout, #counter{} = State) ->
     {stop, {shutdown, ttl_exceeded}, State};
 handle_info(_, State) ->
@@ -111,7 +128,7 @@ code_change(_, State, _) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%  Internals
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-set_config(Config, #counter{} = State) ->
+do_set_config(Config, #counter{} = State) ->
     MaxValue = erater_config:capacity(Config),
     TTL = erater_config:die_after(Config),
     % Construct initial state
