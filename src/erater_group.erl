@@ -19,8 +19,13 @@
 start_link(Name, Config) when is_atom(Name), is_list(Config) ->
     gen_server:start_link({local, Name}, ?MODULE, [Name, Config], []).
 
-configure(Group, Config) ->
-    gen_server:call(Group, {configure, Config}).
+configure(Group, Config) when is_atom(Group), is_list(Config) ->
+    case erater_sup:get_configurator(Group) of
+        undefined ->
+            gen_server:call(Group, {configure, Config});
+        Pid when is_pid(Pid) ->
+            {error, already_reconfiguring}
+    end.
 
 get_config(Group) ->
     ets:tab2list(Group).
