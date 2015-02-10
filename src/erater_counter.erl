@@ -7,7 +7,7 @@
 -export([init/1, terminate/2, code_change/3]).
 -export([handle_call/3, handle_cast/2, handle_info/2]).
 
--export([set_config/2, set_config/3]).
+-export([set_config/2, set_config/3, config_fingerprint/1]).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -48,6 +48,10 @@ set_config(Counter, Config, Timeout) when is_integer(Timeout) ->
 set_config(Counter, Config, async) ->
     Counter ! {set_config, Config},
     ok.
+
+%% Let the manager determine if it needs to reconfigure all counters
+config_fingerprint(Config) ->
+    extract_config(Config).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -129,13 +133,18 @@ code_change(_, State, _) ->
 %%%  Internals
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 do_set_config(Config, #counter{} = State) ->
-    MaxValue = erater_config:capacity(Config),
-    TTL = erater_config:die_after(Config),
     % Construct initial state
+    {MaxValue, TTL} = extract_config(Config),
     State#counter{
         max_value = MaxValue,
         ttl = TTL
         }.
+
+%% Extract important config values from provided config
+extract_config(Config) ->
+    MaxValue = erater_config:capacity(Config),
+    TTL = erater_config:die_after(Config),
+    {MaxValue, TTL}.
 
 %% @doc Counter extrapolation and update
 %% Counter is stored as pair (Time, Value)
