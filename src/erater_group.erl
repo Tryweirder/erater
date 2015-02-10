@@ -158,11 +158,20 @@ run_spawned_counter(Group, CounterName) ->
 
 
 %% Here we assume there is no active reconfigurator due to check in API implementation before gen_server:call
-do_reconfigure(Config, #group{name = Group} = State) ->
+do_reconfigure(Config, #group{name = Group, config = OldConfig} = State) ->
     % First, update global config to apply rps changes and make new counters start with fresh config
     {ok, CleanConfig} = update_config(Group, Config),
     % Start configurator to notify already running counters about changes 
-    {ok, _} = ConfiguratorStartResult = erater_sup:start_configurator(Group, CleanConfig),
+    Result = case need_reconfigure_counters(OldConfig, CleanConfig) of
+        true ->
+            {ok, _} = erater_sup:start_configurator(Group, CleanConfig);
+        false ->
+            ok
+    end,
     % Remember config
     NewState = State#group{config = CleanConfig},
-    {ConfiguratorStartResult, NewState}.
+    {Result, NewState}.
+
+%% Check if two configs differ enough to start heavy counter reconfiguration process
+need_reconfigure_counters(Config1, Config2) ->
+    erater_counter:config_fingerprint(Config1) /= erater_counter:config_fingerprint(Config2).

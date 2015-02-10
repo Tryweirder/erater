@@ -47,6 +47,8 @@ ngroups() ->
 configure(Group, Config) when is_atom(Group) ->
     ok = erater_config:validate(Config),
     case erater_sup:add_group(Group, Config) of
+        ok ->
+            ok;
         {ok, _Pid} ->
             ok;
         {error,{already_started,_Pid}} ->
