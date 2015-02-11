@@ -143,7 +143,7 @@ do_set_config(Config, #counter{} = State) ->
 %% Extract important config values from provided config
 extract_config(Config) ->
     MaxValue = erater_config:capacity(Config),
-    TTL = erater_config:die_after(Config),
+    TTL = erater_config:ttl(Config),
     {MaxValue, TTL}.
 
 %% @doc Counter extrapolation and update
