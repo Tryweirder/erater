@@ -9,6 +9,8 @@
 
 -export([set_config/2, set_config/3, config_fingerprint/1]).
 
+-type skewed_time() :: {Time::integer(), Skew::integer()}.
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%  API
@@ -60,7 +62,7 @@ config_fingerprint(Config) ->
 -record(counter, {
         group,
         name, 
-        last_time,
+        last_sk_time,
         last_value,
         max_value,      % burst capacity
         ttl             % max time to live since last activity, milliseconds
@@ -72,7 +74,7 @@ init([Group, Name, Config]) ->
     State0 = #counter{
             group = Group,
             name = Name,
-            last_time = 0,
+            last_sk_time = {0, 0},
             last_value = 0
             },
     State = #counter{ttl = TTL} = do_set_config(Config, State0),
@@ -82,12 +84,14 @@ init([Group, Name, Config]) ->
 handle_call({set_config, Config}, _From, #counter{} = State) ->
     reply_ttl(ok, do_set_config(Config, State));
 
-handle_call({schedule, MaxWait}, _From, #counter{group = Group, last_time = Time, last_value = Value, max_value = MaxValue} = State) ->
-    {CurrentTime, MaxTime, Tick_ms} = erater_timeserver:get_time_range_tickms(Group, MaxWait),
-    case handle_schedule(CurrentTime, MaxTime, Time, Value, MaxValue) of
-        {ok, NewTime, NewValue} ->
-            WaitTime = Tick_ms * (NewTime - CurrentTime),
-            NewState = State#counter{last_time = NewTime, last_value = NewValue},
+handle_call({schedule, MaxWait}, _From, #counter{group = Group, last_sk_time = SkTime, last_value = Value, max_value = MaxValue} = State) ->
+    {CurrentTime, MaxTime, Tick_ms, CurrentSkew} = erater_timeserver:get_time_range_tickms_skew(Group, MaxWait),
+    CurrentSkTime = {CurrentTime, CurrentSkew},
+    MaxSkTime = {MaxTime, CurrentSkew},
+    case handle_schedule(CurrentSkTime, MaxSkTime, SkTime, Value, MaxValue) of
+        {ok, NewSkTime, NewValue} ->
+            WaitTime = sk_time_diff(NewSkTime, CurrentSkTime, Tick_ms),
+            NewState = State#counter{last_sk_time = NewSkTime, last_value = NewValue},
             reply_ttl({ok, WaitTime}, NewState);
         {error, _} = Error ->
             reply_ttl(Error, State)
@@ -132,6 +136,19 @@ code_change(_, State, _) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%  Internals
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+sk_time_diff({Time1, Skew1}, {Time2, Skew2}, Tick_ms) ->
+    Tick_ms * (Time1 - Time2) + (Skew1 - Skew2).
+
+sk_time_slotdiff({Time1, Skew1}, {Time2, Skew2}) when Skew1 >= Skew2 ->
+    Time1 - Time2;
+sk_time_slotdiff({Time1, _Skew1}, {Time2, _Skew2}) ->
+    Time1 - Time2 - 1.
+
+sk_time_trunc({Time, Skew}, TruncSkew) when Skew =< TruncSkew ->
+    {Time, TruncSkew};
+sk_time_trunc({Time, _Skew}, TruncSkew) ->
+    {Time - 1, TruncSkew}.
+
 do_set_config(Config, #counter{} = State) ->
     % Construct initial state
     {MaxValue, TTL} = extract_config(Config),
@@ -153,29 +170,35 @@ extract_config(Config) ->
 %% Time goes only forward
 %% Value may have range of [0; MaxValue], 0 means completely fresh counter, MaxValue — counter exausted at stored Time
 
--spec handle_schedule(CurrentTime::integer(), MaxTime::integer(), Time::integer(), Value::integer(), MaxValue::integer()) ->
-    {ok, NewTime::integer(), NewValue::integer()} | {error, any()}.
+-spec handle_schedule(CurrentSkTime::skewed_time(), MaxSkTime::skewed_time(), SkTime::skewed_time(), Value::integer(), MaxValue::integer()) ->
+    {ok, NewSkTime::skewed_time(), NewValue::integer()} | {error, any()}.
 % Handle outdated counter
-handle_schedule(CurrentTime, _MaxTime, Time, Value, _MaxValue) when Time < CurrentTime ->
+handle_schedule({_, _} = CurrentSkTime, {_, _} = _MaxSkTime, {Time, MySkew}, Value, _MaxValue)
+        when {Time+1, MySkew} =< CurrentSkTime -> % Incremented previous time is still less than current one
     % First, extrapolate current value
-    TimeSteps = CurrentTime - Time,
-    CurrentValue = max(0, Value - TimeSteps),
-    % Then increment current value by 1. Even if it becomes larger than MaxValue it will not increase
-    {ok, CurrentTime, CurrentValue + 1};
+    TimeSlots = sk_time_slotdiff(CurrentSkTime, {Time, MySkew}),
+    VirtCurrentValue = Value - TimeSlots,
+    if
+        VirtCurrentValue =< 0 -> % Fully replenished counter, reset my skew
+            {ok, CurrentSkTime, 1};
+        true -> % Still have to align to the old skew
+            {ok, sk_time_trunc(CurrentSkTime, MySkew), VirtCurrentValue + 1}
+    end;
 
 % Catch overflows
-handle_schedule(_CurrentTime, MaxTime, Time, _Value, _MaxValue) when Time > MaxTime ->
+handle_schedule({_, _} = _CurrentSkTime, {_, _} = MaxSkTime, {_, _} = SkTime, _Value, _MaxValue) when SkTime > MaxSkTime ->
     % Cannot acces counter beyond given time range
     {error, overflow};
-handle_schedule(_CurrentTime, MaxTime, Time, Value, MaxValue) when Time == MaxTime andalso Value >= MaxValue ->
+handle_schedule({_, _} = _CurrentSkTime, {_, _} = MaxSkTime, {Time, MySkew}, Value, MaxValue)
+        when ({Time+1, MySkew} > MaxSkTime) andalso Value >= MaxValue ->
     % Counter is full at max time, unable to increment
     {error, overflow};
 
 % Here we are sure that we can schedule counter update
-handle_schedule(_CurrentTime, _MaxTime, Time, Value, MaxValue) when Value < MaxValue ->
+handle_schedule({_, _} = _CurrentSkTime, {_, _} = _MaxSkTime, {_, _} = SkTime, Value, MaxValue) when Value < MaxValue ->
     % Counter time is up-to-date or in future, but we can increment Value at that time
-    {ok, Time, Value + 1};
-handle_schedule(_CurrentTime, _MaxTime, Time, Value, _MaxValue) ->
+    {ok, SkTime, Value + 1};
+handle_schedule({_, _} = _CurrentSkTime, {_, _} = _MaxSkTime, {Time, MySkew}, Value, _MaxValue) ->
     % Counter time is up-to-date or in future, we cannot increment Value, so increment time
-    {ok, Time + 1, Value}.
+    {ok, {Time + 1, MySkew}, Value}.
 
