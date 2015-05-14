@@ -13,7 +13,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% API
--export([start_link/2, get_time/1, get_time_range/2, get_time_range_tickms/2]).
+-export([start_link/2, get_time/1, get_time_range/2, get_time_range_tickms/2, get_time_range_tickms_skew/2]).
 
 
 %% gen_server callbacks
@@ -41,6 +41,10 @@ get_time_range(Group, MaxWait) when is_atom(Group) ->
 get_time_range_tickms(Group, MaxWait) when is_atom(Group) ->
     Clock = erater_group:get_clock(Group),
     clock_to_time_range_tickms(Clock, MaxWait).
+
+get_time_range_tickms_skew(Group, MaxWait) when is_atom(Group) ->
+    Clock = erater_group:get_clock(Group),
+    clock_to_time_range_tickms_skew(Clock, MaxWait).
 
 
 %%%
@@ -168,6 +172,15 @@ clock_to_time_range_tickms(#clock{tick_ms = Tick_ms} = Clock, MaxWait) ->
     Time = clock_to_time(Clock),
     {Time, Time + (MaxWait div Tick_ms), Tick_ms}.
 
+clock_to_time_range_tickms_skew(#clock{time = ClockTime, next_timestamp = NextTS, tick_ms = Tick_ms}, MaxWait) ->
+    NextTS_diff = timer:now_diff(os:timestamp(), NextTS),
+    {Time, Skew} = if
+        NextTS_diff < 0 -> % before NextTS, calculate skew
+            {ClockTime, Tick_ms + (NextTS_diff div 1000)};
+        true -> % after NextTS, increase time
+            {ClockTime + 1, (NextTS_diff div 1000)}
+    end,
+    {Time, Time + (MaxWait div Tick_ms), Tick_ms, Skew}.
 
 now_add({Mega, Sec, Micro}, AddMicro) ->
     Micro0 = Micro + AddMicro,
