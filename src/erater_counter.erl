@@ -90,7 +90,7 @@ handle_call({schedule, MaxWait}, _From, #counter{group = Group, last_sk_time = S
     MaxSkTime = {MaxTime, CurrentSkew},
     case handle_schedule(CurrentSkTime, MaxSkTime, SkTime, Value, MaxValue) of
         {ok, NewSkTime, NewValue} ->
-            WaitTime = sk_time_diff(NewSkTime, CurrentSkTime, Tick_ms),
+            WaitTime = sk_time_diff_nonneg(NewSkTime, CurrentSkTime, Tick_ms),
             NewState = State#counter{last_sk_time = NewSkTime, last_value = NewValue},
             reply_ttl({ok, WaitTime}, NewState);
         {error, _} = Error ->
@@ -138,6 +138,11 @@ code_change(_, State, _) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 sk_time_diff({Time1, Skew1}, {Time2, Skew2}, Tick_ms) ->
     Tick_ms * (Time1 - Time2) + (Skew1 - Skew2).
+
+sk_time_diff_nonneg({_, _} = SkTime1, {_, _} = SkTime2, _) when SkTime1 < SkTime2 ->
+    0;
+sk_time_diff_nonneg(SkTime1, SkTime2, Tick_ms) ->
+    sk_time_diff(SkTime1, SkTime2, Tick_ms).
 
 sk_time_slotdiff({Time1, Skew1}, {Time2, Skew2}) when Skew1 >= Skew2 ->
     Time1 - Time2;
