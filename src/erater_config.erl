@@ -1,7 +1,8 @@
 -module(erater_config).
 -export([validate/1, clean/1]).
--export([driver/1, rps/1, capacity/1, ttl/1, shards/1, default_wait/1]).
+-export([nodes/1, driver/1, rps/1, capacity/1, ttl/1, shards/1, default_wait/1]).
 
+-compile({no_auto_import, [nodes/1]}).
 
 validate(Config) when is_list(Config) ->
     true = is_number(rps(Config)),
@@ -15,6 +16,7 @@ validate(Config) when is_list(Config) ->
 
 clean(Config) ->
     [
+        {nodes, nodes(Config)},
         {driver, driver(Config)},
         {rps, rps(Config)},
         {capacity, capacity(Config)},
@@ -23,6 +25,19 @@ clean(Config) ->
         {default_wait, default_wait(Config)}
         ].
 
+nodes(Config) ->
+    NodesConf = case proplists:get_value(nodes, Config) of
+        undefined ->
+            application:get_env(erater, nodes, [node()]);
+        Nodes ->
+            Nodes
+    end,
+    expand_nodes(NodesConf).
+
+expand_nodes(Nodes) when is_list(Nodes) ->
+    Nodes;
+expand_nodes({mfa, {M, F, A}}) ->
+    apply(M, F, A).
 
 driver(Config) ->
     proplists:get_value(driver, Config, erater_group).
