@@ -37,7 +37,7 @@ get_config(Group, Key) ->
     ets:lookup_element(Group, Key, 2).
 
 status(Group) when is_atom(Group) ->
-    get_group_status(Group).
+    minishard:status(Group).
 
 
 set_clock(Group, Clock) when is_tuple(Clock), element(1, Clock) == clock ->
@@ -117,20 +117,6 @@ update_config(Group, NewConfig) ->
     true = ets:insert(Group, CleanConfig),
     {ok, CleanConfig}.
 
-get_group_status(Group) ->
-    AllNodes = [node() | nodes()],
-    ActiveNodes = [{Node, Shard} || {Shard, Node} <- erater_shard:map(Group)],
-    NodesToExamine = [Node || Node <- AllNodes, not lists:keymember(Node, 1, ActiveNodes)],
-    StandbyNodes = [{Node, standby} || Node <- NodesToExamine, node_has_group(Node, Group)],
-
-    lists:keysort(1, ActiveNodes ++ StandbyNodes).
-
-node_has_group(Node, Group) ->
-    case rpc:call(Node, erater_group, get_config, [Group, shards]) of
-        {badrpc, _} -> false;
-        undefined -> false;
-        Shards when is_integer(Shards) -> true
-    end.
 
 
 

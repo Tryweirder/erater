@@ -81,13 +81,11 @@ init({group, Name, Options}) ->
     Timeserver = {timeserver,
                   {erater_timeserver, start_link, [Name, Options]},
                   transient, 1000, worker, [erater_timeserver]},
-    Shard = {shard,
-                 {erater_shard, start_link, [Name, Options]},
-                 transient, 1000, worker, [erater_shard]},
     ProxySup = {proxies,
                 {?MODULE, start_link, [{proxies, Name}]},
                 permanent, 1000, supervisor, []},
-    {ok, {{one_for_all, 10, 1}, [Manager, Timeserver, Shard, ProxySup]}};
+    MinishardParts = minishard_sup:cluster_internal_specs(Name, erater_shard),
+    {ok, {{one_for_all, 10, 1}, [Manager, Timeserver, ProxySup] ++ MinishardParts}};
 
 %% Each group has its own proxy set
 init({proxies, _}) ->
