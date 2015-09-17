@@ -149,11 +149,6 @@ sk_time_slotdiff({Time1, Skew1}, {Time2, Skew2}) when Skew1 >= Skew2 ->
 sk_time_slotdiff({Time1, _Skew1}, {Time2, _Skew2}) ->
     Time1 - Time2 - 1.
 
-sk_time_trunc({Time, Skew}, TruncSkew) when Skew =< TruncSkew ->
-    {Time, TruncSkew};
-sk_time_trunc({Time, _Skew}, TruncSkew) ->
-    {Time - 1, TruncSkew}.
-
 do_set_config(Config, #counter{} = State) ->
     % Construct initial state
     {MaxValue, TTL} = extract_config(Config),
@@ -177,18 +172,20 @@ extract_config(Config) ->
 
 -spec handle_schedule(CurrentSkTime::skewed_time(), MaxSkTime::skewed_time(), SkTime::skewed_time(), Value::integer(), MaxValue::integer()) ->
     {ok, NewSkTime::skewed_time(), NewValue::integer()} | {error, any()}.
+% Handle fully replenished counter
+handle_schedule({_, _} = CurrentSkTime, {_, _} = _MaxSkTime, {Time, MySkew}, Value, _MaxValue)
+        when {Time+Value, MySkew} =< CurrentSkTime -> % MyTime + Val * SlotTime =< CurTime -- time to fully reset the counter
+    {ok, CurrentSkTime, 1};
+
 % Handle outdated counter
 handle_schedule({_, _} = CurrentSkTime, {_, _} = _MaxSkTime, {Time, MySkew}, Value, _MaxValue)
         when {Time+1, MySkew} =< CurrentSkTime -> % Incremented previous time is still less than current one
-    % First, extrapolate current value
+    % How much full slots elapsed since last update?
     TimeSlots = sk_time_slotdiff(CurrentSkTime, {Time, MySkew}),
-    VirtCurrentValue = Value - TimeSlots,
-    if
-        VirtCurrentValue =< 0 -> % Fully replenished counter, reset my skew
-            {ok, CurrentSkTime, 1};
-        true -> % Still have to align to the old skew
-            {ok, sk_time_trunc(CurrentSkTime, MySkew), VirtCurrentValue + 1}
-    end;
+    % Add slots to time, substract slots from value, increment value
+    MyNewSkTime = {Time + TimeSlots, MySkew},
+    NewValue = Value - TimeSlots + 1,
+    {ok, MyNewSkTime, NewValue};
 
 % Catch overflows
 handle_schedule({_, _} = _CurrentSkTime, {_, _} = MaxSkTime, {_, _} = SkTime, _Value, _MaxValue) when SkTime > MaxSkTime ->
