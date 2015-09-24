@@ -2,7 +2,7 @@
 -behavior(minishard).
 
 %% API
--export([shard/2, whereis/2, map/1]).
+-export([shard/2, whereis/2, whereis_shard/2, map/1]).
 
 %% minishard callbacks
 -export([shard_count/1, cluster_nodes/1]).
@@ -22,6 +22,9 @@ whereis(Group, CounterName) when is_atom(Group), is_binary(CounterName) ->
         undefined -> local;
         Shard -> minishard:get_node(Group, Shard)
     end.
+
+whereis_shard(Group, Shard) when is_atom(Group), is_integer(Shard) ->
+    minishard:get_manager(Group, Shard).
 
 % Determine shard number for given counter
 shard(Group, CounterName) ->
