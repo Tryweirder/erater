@@ -2,7 +2,7 @@
 -behavior(gen_server).
 
 -export([start_link/3, run/3]).
--export([acquire/2, async_acquire/3]).
+-export([acquire/2, acquire/3]).
 
 -export([init/1, terminate/2, code_change/3]).
 -export([handle_call/3, handle_cast/2, handle_info/2]).
@@ -16,28 +16,39 @@
 %%%  API
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 start_link(Group, Name, Config) ->
-    gen_server:start_link(?MODULE, [Group, Name, Config], []).
+    State0 = seed_state(Group, Name, Config),
+    gen_server:start_link(?MODULE, State0, []).
 
 run(Group, Name, Config) ->
-    {ok, State0, Timeout} = init([Group, Name, Config]),
+    State0 = seed_state(Group, Name, Config),
+    {ok, State0, Timeout} = init(State0),
     gen_server:enter_loop(erater_counter, [], State0, Timeout).
 
 
 acquire(Counter, MaxWait) ->
-    case gen_server:call(Counter, {schedule, MaxWait}) of
+    sync_acquire(Counter, MaxWait, []).
+
+acquire(Counter, MaxWait, Options) ->
+    case proplists:get_value(async, Options) of
+        undefined -> sync_acquire(Counter, MaxWait, Options);
+        Async -> async_acquire(Counter, MaxWait, Async, Options)
+    end.
+
+sync_acquire(Counter, MaxWait, Options) ->
+    case gen_server:call(Counter, {schedule, MaxWait, Options}) of
         {ok, Wait} -> % OK, just convert server slots to milliseconds
             {ok, Wait};
         {error, overflow} -> % Unable to acquire free slot in reasonable time
             {error, overflow}
     end.
 
-async_acquire(Counter, MaxWait, {Pid, _Ref} = ReturnPath) when is_pid(Pid) ->
-    do_async_acquire(Counter, MaxWait, ReturnPath);
-async_acquire(Counter, MaxWait, {mfa, _, _, _} = ReturnPath) ->
-    do_async_acquire(Counter, MaxWait, ReturnPath).
+async_acquire(Counter, MaxWait, {Pid, _Ref} = ReturnPath, Options) when is_pid(Pid) ->
+    do_async_acquire(Counter, MaxWait, ReturnPath, Options);
+async_acquire(Counter, MaxWait, {mfa, _, _, _} = ReturnPath, Options) ->
+    do_async_acquire(Counter, MaxWait, ReturnPath, Options).
 
-do_async_acquire(Counter, MaxWait, ReturnPath) ->
-    Counter ! {schedule, MaxWait, ReturnPath}.
+do_async_acquire(Counter, MaxWait, ReturnPath, Options) ->
+    Counter ! {schedule, MaxWait, ReturnPath, Options}.
 
 %% On-the-fly counter reconfiguration
 set_config(Counter, Config) ->
@@ -59,7 +70,14 @@ config_fingerprint(Config) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%  gen_server callbacks
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+-record(timecfg, {
+        rps,
+        ref_micros,
+        slot_micros }).
+-type timecfg() :: #timecfg{}.
+
 -record(counter, {
+        mode = group :: group | {adhoc, timecfg()},
         group,
         name, 
         last_sk_time,
@@ -68,24 +86,57 @@ config_fingerprint(Config) ->
         ttl             % max time to live since last activity, milliseconds
         }).
 
-init([Group, Name, Config]) ->
+seed_state(Group, Name, Config) ->
+    State0 = #counter{
+        mode = seed_mode(Config),
+        group = Group,
+        name = Name,
+        last_sk_time = {0, 0},
+        last_value = 0
+        },
+    #counter{} = do_set_config(Config, State0).
+
+seed_mode(Config) ->
+    case proplists:get_value(mode, Config, group) of
+        group ->
+            group;
+        adhoc ->
+            {adhoc, seed_timecfg(Config)}
+    end.
+
+seed_timecfg(Config) ->
+    RPS = proplists:get_value(rps, Config),
+    #timecfg{
+        rps = RPS,
+        ref_micros = erlang:system_time(micro_seconds),
+        slot_micros = 1000000 div RPS
+        }.
+
+set_rps(RPS, #timecfg{ref_micros = OldRef, slot_micros = OldSlot}) ->
+    CurTime = erlang:system_time(micro_seconds),
+    CurSlots = (CurTime - OldRef) div OldSlot,
+    CurSlotBase = OldRef + CurSlots*OldSlot,
+
+    NewSlot = 1000000 div RPS,
+    NewRef = CurSlotBase - NewSlot*CurSlots,
+    #timecfg{
+        rps = RPS,
+        ref_micros = NewRef,
+        slot_micros = NewSlot }.
+
+
+init(#counter{name = Name, group = Group, ttl = TTL} = State) ->
     put(erater_counter, {Group, Name}),
     % Construct initial state
-    State0 = #counter{
-            group = Group,
-            name = Name,
-            last_sk_time = {0, 0},
-            last_value = 0
-            },
-    State = #counter{ttl = TTL} = do_set_config(Config, State0),
     {ok, State, TTL}.
 
 
 handle_call({set_config, Config}, _From, #counter{} = State) ->
     reply_ttl(ok, do_set_config(Config, State));
 
-handle_call({schedule, MaxWait}, _From, #counter{group = Group, last_sk_time = SkTime, last_value = Value, max_value = MaxValue} = State) ->
-    {CurrentTime, MaxTime, Tick_ms, CurrentSkew} = erater_timeserver:get_time_range_tickms_skew(Group, MaxWait),
+handle_call({schedule, MaxWait, Options}, _From, #counter{last_sk_time = SkTime, last_value = Value, max_value = MaxValue} = State0) ->
+    State = update_config(Options, State0),
+    {CurrentTime, MaxTime, Tick_ms, CurrentSkew} = get_time_info(MaxWait, State),
     CurrentSkTime = {CurrentTime, CurrentSkew},
     MaxSkTime = {MaxTime, CurrentSkew},
     case handle_schedule(CurrentSkTime, MaxSkTime, SkTime, Value, MaxValue) of
@@ -100,8 +151,8 @@ handle_call({schedule, MaxWait}, _From, #counter{group = Group, last_sk_time = S
 handle_cast(_, #counter{} = State) ->
     noreply_ttl(State).
 
-handle_info({schedule, MaxWait, {Pid, Ref} = ReturnPath}, #counter{} = State) when is_pid(Pid) ->
-    { reply, Response, NextState, _} = handle_call({schedule, MaxWait}, ReturnPath, State),
+handle_info({schedule, MaxWait, {Pid, Ref} = ReturnPath, Options}, #counter{} = State) when is_pid(Pid) ->
+    { reply, Response, NextState, _} = handle_call({schedule, MaxWait, Options}, ReturnPath, State),
     Pid ! {erater_response, Ref, Response},
     noreply_ttl(NextState);
 
@@ -136,6 +187,26 @@ code_change(_, State, _) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%  Internals
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%% {CurrentTime, MaxTime, Tick_ms, CurrentSkew} = get_time_info(MaxWait, State),
+get_time_info(MaxWait, #counter{mode = group, group = Group}) ->
+    erater_timeserver:get_time_range_tickms_skew(Group, MaxWait);
+get_time_info(MaxWait, #counter{mode = {adhoc, #timecfg{} = TimeCfg}}) ->
+    #timecfg{
+        slot_micros = SlotMicros,
+        ref_micros = RefMicros
+        } = TimeCfg,
+    CurMicros = erlang:system_time(micro_seconds),
+    RelMicros = CurMicros - RefMicros,
+
+    CurrentTime = RelMicros div SlotMicros,
+    MaxTime = (RelMicros + MaxWait*1000) div SlotMicros,
+    Tick_ms = SlotMicros div 1000,
+    CurrentSkew = (RelMicros - CurrentTime*SlotMicros) div 1000,
+
+    {CurrentTime, MaxTime, Tick_ms, CurrentSkew}.
+
+
 sk_time_diff({Time1, Skew1}, {Time2, Skew2}, Tick_ms) ->
     Tick_ms * (Time1 - Time2) + (Skew1 - Skew2).
 
@@ -162,6 +233,20 @@ extract_config(Config) ->
     MaxValue = erater_config:capacity(Config),
     TTL = erater_config:ttl(Config),
     {MaxValue, TTL}.
+
+update_config(Options, #counter{} = State) ->
+    lists:foldl(fun update_config_value/2, State, Options).
+
+update_config_value({ttl, TTL}, State) ->
+    State#counter{ttl = TTL};
+update_config_value({max_value, MaxValue}, State) ->
+    State#counter{max_value = MaxValue};
+update_config_value({rps, RPS}, #counter{mode = {adhoc, TimeCfg}} = State) ->
+    NewTimeCfg = set_rps(RPS, TimeCfg),
+    State#counter{mode = {adhoc, NewTimeCfg}};
+update_config_value(_, State) ->
+    State.
+
 
 %% @doc Counter extrapolation and update
 %% Counter is stored as pair (Time, Value)

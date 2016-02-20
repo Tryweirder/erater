@@ -4,7 +4,7 @@
 % API
 -export([start/0]).
 -export([configure/2]).
--export([acquire/3, local_acquire/3, local_async_acquire/4]).
+-export([acquire/3, acquire/4, local_acquire/3, local_acquire/4, local_async_acquire/4]).
 -export([groups/0, ngroups/0]).
 
 % Application calbacks
@@ -55,21 +55,25 @@ configure(Group, Config) when is_atom(Group) ->
             erater_group:configure(Group, Config)
     end.
 
-acquire(Group, CounterName, MaxWait) when is_atom(Group), is_integer(MaxWait) ->
+acquire(Group, CounterName, MaxWait) ->
+    acquire(Group, CounterName, MaxWait, []).
+
+acquire(Group, CounterName, MaxWait, Options) when is_atom(Group), is_integer(MaxWait), is_list(Options) ->
     case erater_shard:whereis(Group, CounterName) of
         local ->
-            local_acquire(Group, CounterName, MaxWait);
+            local_acquire(Group, CounterName, MaxWait, Options);
         undefined ->
             {error, unavailable};
         Node ->
-            rpc:call(Node, ?MODULE, local_acquire, [Group, CounterName, MaxWait])
+            rpc:call(Node, ?MODULE, local_acquire, [Group, CounterName, MaxWait, Options])
     end.
 
 local_acquire(Group, CounterName, MaxWait) ->
-    Driver = erater_group:get_config(Group, driver),
-    Driver:acquire(Group, CounterName, MaxWait).
+    local_acquire(Group, CounterName, MaxWait, []).
 
 local_async_acquire(Group, CounterName, MaxWait, ReturnPath) ->
-    Driver = erater_group:get_config(Group, driver),
-    Driver:async_acquire(Group, CounterName, MaxWait, ReturnPath).
+    local_acquire(Group, CounterName, MaxWait, [{async, ReturnPath}]).
 
+local_acquire(Group, CounterName, MaxWait, Options) ->
+    Driver = erater_group:get_config(Group, driver),
+    Driver:acquire(Group, CounterName, MaxWait, Options).

@@ -1,6 +1,6 @@
 -module(erater_config).
 -export([validate/1, clean/1]).
--export([nodes/1, driver/1, rps/1, capacity/1, ttl/1, shards/1, default_wait/1]).
+-export([nodes/1, driver/1, mode/1, rps/1, capacity/1, ttl/1, shards/1, default_wait/1]).
 
 -compile({no_auto_import, [nodes/1]}).
 
@@ -18,6 +18,7 @@ clean(Config) ->
     [
         {nodes, nodes(Config)},
         {driver, driver(Config)},
+        {mode, mode(Config)},
         {rps, rps(Config)},
         {capacity, capacity(Config)},
         {ttl, ttl(Config)},
@@ -41,6 +42,18 @@ expand_nodes({mfa, {M, F, A}}) ->
 
 driver(Config) ->
     proplists:get_value(driver, Config, erater_group).
+
+mode(Config) ->
+    case lists:keyfind(mode, 1, Config) of
+        {mode, Mode} -> Mode;
+        false -> default_mode(driver(Config))
+    end.
+
+default_mode(Driver) ->
+    case erlang:function_exported(Driver, default_mode, 0) of
+        true -> Driver:default_mode();
+        false -> undefined
+    end.
 
 rps(Config) ->
     proplists:get_value(rps, Config, 1).
