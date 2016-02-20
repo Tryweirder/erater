@@ -6,8 +6,9 @@
 -export([start_link/2]).
 -export([configure/2, get_config/1, get_config/2, status/1]).
 -export([set_clock/2, get_clock/1]).
--export([acquire/3, async_acquire/4]).
+-export([acquire/3, acquire/4]).
 -export([counters/1]).
+-export([default_mode/0]).
 
 -export([init/1, terminate/2, code_change/3]).
 -export([handle_call/3, handle_cast/2, handle_info/2]).
@@ -48,23 +49,26 @@ get_clock(Group) ->
     Clock.
 
 
-acquire(Group, CounterName, MaxWait) when is_atom(Group), is_integer(MaxWait) ->
+acquire(Group, CounterName, MaxWait) ->
+    acquire(Group, CounterName, MaxWait, []).
+
+acquire(Group, CounterName, MaxWait, Options) when is_atom(Group), is_integer(MaxWait), is_list(Options) ->
     CounterPid = find_or_spawn(Group, CounterName),
     try
-        erater_counter:acquire(CounterPid, MaxWait)
+        erater_counter:acquire(CounterPid, MaxWait, Options)
     catch
         exit: _ -> % Race: counter died while we were accessing it - retry
-            acquire(Group, CounterName, MaxWait)
+            NewCounterPid = find_or_spawn(Group, CounterName),
+            erater_counter:acquire(NewCounterPid, MaxWait, Options)
     end.
-
-async_acquire(Group, CounterName, MaxWait, ReturnPath) ->
-    CounterPid = find_or_spawn(Group, CounterName),
-    erater_counter:async_acquire(CounterPid, MaxWait, ReturnPath).
 
 %% Fetch list of all counters in this group
 counters(Group) when is_atom(Group) ->
     Pattern = ets:fun2ms(fun({{_, _, {G, N}}, P, _}) when G == Group -> {N, P} end),
     gproc:select({l, n}, Pattern).
+
+default_mode() ->
+    group.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% gen_server
