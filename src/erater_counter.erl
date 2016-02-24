@@ -64,7 +64,7 @@ set_config(Counter, Config, async) ->
 
 %% Let the manager determine if it needs to reconfigure all counters
 config_fingerprint(Config) ->
-    extract_config(Config).
+    extract_config(group, Config).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -106,10 +106,14 @@ seed_mode(Config) ->
 
 seed_timecfg(Config) ->
     RPS = proplists:get_value(rps, Config),
+    SlotMicros = case is_number(RPS) of
+        true -> round(1000000/RPS);
+        false -> 1000000 % Fake 1 RPS
+    end,
     #timecfg{
         rps = RPS,
         ref_micros = erlang:system_time(micro_seconds),
-        slot_micros = round(1000000/RPS)
+        slot_micros = SlotMicros
         }.
 
 set_rps(RPS, #timecfg{rps = RPS} = OldCfg) ->
@@ -128,17 +132,17 @@ set_rps(RPS, #timecfg{ref_micros = OldRef, slot_micros = OldSlot}) ->
         slot_micros = NewSlot }.
 
 
-init(#counter{name = Name, group = Group, ttl = TTL} = State) ->
+init(#counter{name = Name, group = Group} = State) ->
     put(erater_counter, {Group, Name}),
     % Construct initial state
-    {ok, State, TTL}.
+    {ok, State, ttl(State)}.
 
 
 handle_call({set_config, Config}, _From, #counter{} = State) ->
     reply_ttl(ok, do_set_config(Config, State));
 
-handle_call({schedule, MaxWait, Options}, _From, #counter{last_sk_time = SkTime, last_value = Value, burst = Burst} = State0) ->
-    State = update_config(Options, State0),
+handle_call({schedule, MaxWait, Options}, _From, #counter{last_sk_time = SkTime, last_value = Value} = State0) ->
+    #counter{burst = Burst} = State = update_config(Options, State0),
     {CurrentTime, MaxTime, Tick_ms, CurrentSkew} = get_time_info(MaxWait, State),
     CurrentSkTime = {CurrentTime, CurrentSkew},
     MaxSkTime = {MaxTime, CurrentSkew},
@@ -173,12 +177,23 @@ handle_info(_, State) ->
     noreply_ttl(State).
 
 
-reply_ttl(Reply, #counter{ttl = TTL} = State) ->
-    {reply, Reply, State, TTL}.
+reply_ttl(Reply, State) ->
+    {reply, Reply, State, ttl(State)}.
 
-noreply_ttl(#counter{ttl = TTL} = State) ->
-    {noreply, State, TTL}.
+noreply_ttl(State) ->
+    {noreply, State, ttl(State)}.
 
+ttl(#counter{ttl = TTL}) when is_integer(TTL) ->
+    TTL;
+ttl(#counter{burst = Burst} = State) ->
+    round(Burst / rps(State) + 1) * 1000.
+
+rps(#counter{mode = group, group = Group}) ->
+    erater_group:get_config(Group, rps);
+rps(#counter{mode = {adhoc, #timecfg{rps = RPS}}}) when is_number(RPS) ->
+    RPS;
+rps(#counter{}) ->
+    1.
 
 terminate(_, _) ->
     ok.
@@ -223,19 +238,25 @@ sk_time_slotdiff({Time1, Skew1}, {Time2, Skew2}) when Skew1 >= Skew2 ->
 sk_time_slotdiff({Time1, _Skew1}, {Time2, _Skew2}) ->
     Time1 - Time2 - 1.
 
-do_set_config(Config, #counter{} = State) ->
+do_set_config(Config, #counter{mode = Mode} = State) ->
     % Construct initial state
-    {Burst, TTL} = extract_config(Config),
+    {Burst, TTL} = extract_config(Mode, Config),
     State#counter{
         burst = Burst,
         ttl = TTL
         }.
 
 %% Extract important config values from provided config
-extract_config(Config) ->
+extract_config(group, Config) ->
     Burst = erater_config:burst(Config),
     TTL = erater_config:ttl(Config),
-    {Burst, TTL}.
+    {Burst, TTL};
+extract_config({adhoc, #timecfg{rps = RPS}}, Config) ->
+    case is_number(RPS) of
+        false -> {0, undefined};
+        true -> extract_config(group, [{rps, RPS} | Config])
+    end.
+
 
 update_config(Options, #counter{} = State) ->
     lists:foldl(fun update_config_value/2, State, Options).

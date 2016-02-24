@@ -28,7 +28,10 @@ start_link(Group, RPS) when is_atom(Group), is_number(RPS) ->
     RegName = list_to_atom(atom_to_list(Group) ++ "_timeserver"),
     gen_server:start_link({local, RegName}, ?MODULE, [Group, RPS], []);
 start_link(Group, Config) when is_atom(Group) ->
-    start_link(Group, erater_config:rps(Config)).
+    case erater_config:mode(Config) of
+        adhoc -> ignore;
+        _ -> start_link(Group, erater_config:rps(Config))
+    end.
 
 get_time(Group) when is_atom(Group) ->
     Clock = erater_group:get_clock(Group),
