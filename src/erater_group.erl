@@ -112,16 +112,20 @@ code_change(_, State, _) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 save_config(Group, Config) ->
     CleanConfig = erater_config:clean(Config),
-    true = ets:insert(Group, CleanConfig),
-    {ok, CleanConfig}.
+    Mode = erater_config:mode(CleanConfig),
+    ModeConfig = mode_config(Mode, CleanConfig),
+    true = ets:insert(Group, ModeConfig),
+    {ok, ModeConfig}.
 
 update_config(Group, NewConfig) ->
     OldConfig = get_config(Group),
-    CleanConfig = erater_config:clean(NewConfig ++ OldConfig),
-    true = ets:insert(Group, CleanConfig),
-    {ok, CleanConfig}.
+    save_config(Group, NewConfig ++ OldConfig).
 
 
+mode_config(group, Config) ->
+    Config;
+mode_config(adhoc, Config) ->
+    [{Key, Value} || {Key, Value} <- Config, not lists:member(Key, [rps, burst, ttl])].
 
 
 key(Group, CounterName) ->
