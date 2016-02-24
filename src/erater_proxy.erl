@@ -1,6 +1,6 @@
 -module(erater_proxy).
 
--export([start_link/2, acquire/3, send_acquire/4]).
+-export([start_link/2, acquire/3, acquire/4, send_acquire/4]).
 
 -behavior(gen_server).
 -export([init/1, handle_info/2, handle_cast/2, handle_call/3, code_change/3, terminate/2]).
@@ -9,12 +9,15 @@ start_link(Group, Peer) ->
     gen_server:start_link(?MODULE, [Group, Peer], []).
 
 acquire(Proxy, CounterName, MaxWait) ->
+    acquire(Proxy, CounterName, MaxWait, []).
+
+acquire(Proxy, CounterName, MaxWait, Options) ->
     Ref = make_ref(),
-    send_acquire(Proxy, CounterName, MaxWait, {self(), Ref}),
+    send_acquire(Proxy, CounterName, MaxWait, [{async, {self(), Ref}} | Options]),
     recv_acquire_response(Ref).
 
-send_acquire(Proxy, CounterName, MaxWait, RespondPath) ->
-    Proxy ! {async_acquire, CounterName, MaxWait, RespondPath}.
+send_acquire(Proxy, CounterName, MaxWait, Options) ->
+    Proxy ! {async_acquire, CounterName, MaxWait, Options}.
 
 recv_acquire_response(Ref) ->
     receive
@@ -35,8 +38,8 @@ init([Group, Peer]) ->
     {ok, State}.
 
 
-handle_info({async_acquire, CounterName, MaxWait, RespondPath}, #proxy{group = Group} = State) ->
-    erater:local_async_acquire(Group, CounterName, MaxWait, RespondPath),
+handle_info({async_acquire, CounterName, MaxWait, Options}, #proxy{group = Group} = State) ->
+    erater:local_acquire(Group, CounterName, MaxWait, Options),
     {noreply, State}.
 
 
