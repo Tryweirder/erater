@@ -109,15 +109,18 @@ seed_timecfg(Config) ->
     #timecfg{
         rps = RPS,
         ref_micros = erlang:system_time(micro_seconds),
-        slot_micros = 1000000 div RPS
+        slot_micros = round(1000000/RPS)
         }.
 
+set_rps(RPS, #timecfg{rps = RPS} = OldCfg) ->
+    % Rps matches the old value, no need to do math
+    OldCfg;
 set_rps(RPS, #timecfg{ref_micros = OldRef, slot_micros = OldSlot}) ->
     CurTime = erlang:system_time(micro_seconds),
     CurSlots = (CurTime - OldRef) div OldSlot,
     CurSlotBase = OldRef + CurSlots*OldSlot,
 
-    NewSlot = 1000000 div RPS,
+    NewSlot = round(1000000/RPS),
     NewRef = CurSlotBase - NewSlot*CurSlots,
     #timecfg{
         rps = RPS,
