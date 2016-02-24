@@ -69,8 +69,8 @@ lock_table(Group) ->
     ets:lookup_element(Group, lock_table, 2).
 
 
-max_value(Group) ->
-    ets:lookup_element(Group, capacity, 2).
+burst(Group) ->
+    ets:lookup_element(Group, burst, 2).
 
 slot_millis(Group) ->
     ets:lookup_element(Group, slot_millis, 2).
@@ -106,8 +106,8 @@ perform_acquire(LockResult, Group, Name, MaxWait) ->
     Time = global_time(Group),
     SlotMillis = slot_millis(Group),
     MaxTime = Time + MaxWait div SlotMillis,
-    MaxValue = max_value(Group),
-    {Response, NewCounter} = update_counter(Group, Counter, Time, MaxTime, MaxValue),
+    Burst = burst(Group),
+    {Response, NewCounter} = update_counter(Group, Counter, Time, MaxTime, Burst),
     ExtResponse = case Response of
         {ok, SlotsToWait} ->
             {ok, SlotsToWait * SlotMillis};
@@ -124,35 +124,35 @@ get_counter(Group, Name) ->
     end.
 
 % New counter: initialize at zero and re-run
-update_counter(Group, {new, Name}, Time, MaxTime, MaxValue) ->
+update_counter(Group, {new, Name}, Time, MaxTime, Burst) ->
     Counter = make_counter(Name, Time, 0),
-    update_counter(Group, Counter, Time, MaxTime, MaxValue);
+    update_counter(Group, Counter, Time, MaxTime, Burst);
 
 % Old counter: extrapolate and re-run
-update_counter(Group, {Name, PrevTime, PrevValue}, Time, MaxTime, MaxValue) when PrevTime < Time ->
+update_counter(Group, {Name, PrevTime, PrevValue}, Time, MaxTime, Burst) when PrevTime < Time ->
     TimeSteps = Time - PrevTime,
     Value = max(0, PrevValue - TimeSteps),
-    update_counter(Group, {Name, Time, Value}, Time, MaxTime, MaxValue);
+    update_counter(Group, {Name, Time, Value}, Time, MaxTime, Burst);
 
 % Timer is too far ahead
-update_counter(_Group, {_Name, PrevTime, _} = Counter, _Time, MaxTime, _MaxValue) when PrevTime > MaxTime ->
+update_counter(_Group, {_Name, PrevTime, _} = Counter, _Time, MaxTime, _Burst) when PrevTime > MaxTime ->
     Response = {error, overflow},
     {Response, Counter};
 
 % Cannot increment counter without going too far ahead (max value at max time)
-update_counter(_Group, {_Name, MaxTime, PrevValue} = Counter, _Time, MaxTime, MaxValue) when PrevValue >= MaxValue ->
+update_counter(_Group, {_Name, MaxTime, PrevValue} = Counter, _Time, MaxTime, Burst) when PrevValue >= Burst ->
     Response = {error, overflow},
     {Response, Counter};
 
 % Low enough value at reachable time
-update_counter(Group, {Name, PrevTime, PrevValue}, Time, _MaxTime, MaxValue) when PrevValue < MaxValue ->
+update_counter(Group, {Name, PrevTime, PrevValue}, Time, _MaxTime, Burst) when PrevValue < Burst ->
     Response = {ok, PrevTime - Time},
     NewCounter = {Name, PrevTime, PrevValue + 1},
     ets:insert(Group, NewCounter),
     {Response, NewCounter};
 
 % Value is too high to increment but time is low, so increase time
-update_counter(Group, {Name, PrevTime, PrevValue}, Time, _MaxTime, _MaxValue) ->
+update_counter(Group, {Name, PrevTime, PrevValue}, Time, _MaxTime, _Burst) ->
     NewTime = PrevTime + 1,
     Response = {ok, NewTime - Time},
     NewCounter = {Name, NewTime, PrevValue},

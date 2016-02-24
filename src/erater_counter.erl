@@ -82,7 +82,7 @@ config_fingerprint(Config) ->
         name, 
         last_sk_time,
         last_value,
-        max_value,      % burst capacity
+        burst,          % max possible counter value
         ttl             % max time to live since last activity, milliseconds
         }).
 
@@ -134,12 +134,12 @@ init(#counter{name = Name, group = Group, ttl = TTL} = State) ->
 handle_call({set_config, Config}, _From, #counter{} = State) ->
     reply_ttl(ok, do_set_config(Config, State));
 
-handle_call({schedule, MaxWait, Options}, _From, #counter{last_sk_time = SkTime, last_value = Value, max_value = MaxValue} = State0) ->
+handle_call({schedule, MaxWait, Options}, _From, #counter{last_sk_time = SkTime, last_value = Value, burst = Burst} = State0) ->
     State = update_config(Options, State0),
     {CurrentTime, MaxTime, Tick_ms, CurrentSkew} = get_time_info(MaxWait, State),
     CurrentSkTime = {CurrentTime, CurrentSkew},
     MaxSkTime = {MaxTime, CurrentSkew},
-    case handle_schedule(CurrentSkTime, MaxSkTime, SkTime, Value, MaxValue) of
+    case handle_schedule(CurrentSkTime, MaxSkTime, SkTime, Value, Burst) of
         {ok, NewSkTime, NewValue} ->
             WaitTime = sk_time_diff_nonneg(NewSkTime, CurrentSkTime, Tick_ms),
             NewState = State#counter{last_sk_time = NewSkTime, last_value = NewValue},
@@ -222,25 +222,25 @@ sk_time_slotdiff({Time1, _Skew1}, {Time2, _Skew2}) ->
 
 do_set_config(Config, #counter{} = State) ->
     % Construct initial state
-    {MaxValue, TTL} = extract_config(Config),
+    {Burst, TTL} = extract_config(Config),
     State#counter{
-        max_value = MaxValue,
+        burst = Burst,
         ttl = TTL
         }.
 
 %% Extract important config values from provided config
 extract_config(Config) ->
-    MaxValue = erater_config:capacity(Config),
+    Burst = erater_config:burst(Config),
     TTL = erater_config:ttl(Config),
-    {MaxValue, TTL}.
+    {Burst, TTL}.
 
 update_config(Options, #counter{} = State) ->
     lists:foldl(fun update_config_value/2, State, Options).
 
 update_config_value({ttl, TTL}, State) ->
     State#counter{ttl = TTL};
-update_config_value({max_value, MaxValue}, State) ->
-    State#counter{max_value = MaxValue};
+update_config_value({burst, Burst}, State) ->
+    State#counter{burst = Burst};
 update_config_value({rps, RPS}, #counter{mode = {adhoc, TimeCfg}} = State) ->
     NewTimeCfg = set_rps(RPS, TimeCfg),
     State#counter{mode = {adhoc, NewTimeCfg}};
@@ -253,17 +253,17 @@ update_config_value(_, State) ->
 %% Each hit increments Value by 1
 %% Each time slot decrements Value by 1
 %% Time goes only forward
-%% Value may have range of [0; MaxValue], 0 means completely fresh counter, MaxValue — counter exausted at stored Time
+%% Value may have range of [0; Burst], 0 means completely fresh counter, Burst — counter exausted at stored Time
 
--spec handle_schedule(CurrentSkTime::skewed_time(), MaxSkTime::skewed_time(), SkTime::skewed_time(), Value::integer(), MaxValue::integer()) ->
+-spec handle_schedule(CurrentSkTime::skewed_time(), MaxSkTime::skewed_time(), SkTime::skewed_time(), Value::integer(), Burst::integer()) ->
     {ok, NewSkTime::skewed_time(), NewValue::integer()} | {error, any()}.
 % Handle fully replenished counter
-handle_schedule({_, _} = CurrentSkTime, {_, _} = _MaxSkTime, {Time, MySkew}, Value, _MaxValue)
+handle_schedule({_, _} = CurrentSkTime, {_, _} = _MaxSkTime, {Time, MySkew}, Value, _Burst)
         when {Time+Value, MySkew} =< CurrentSkTime -> % MyTime + Val * SlotTime =< CurTime -- time to fully reset the counter
     {ok, CurrentSkTime, 1};
 
 % Handle outdated counter
-handle_schedule({_, _} = CurrentSkTime, {_, _} = _MaxSkTime, {Time, MySkew}, Value, _MaxValue)
+handle_schedule({_, _} = CurrentSkTime, {_, _} = _MaxSkTime, {Time, MySkew}, Value, _Burst)
         when {Time+1, MySkew} =< CurrentSkTime -> % Incremented previous time is still less than current one
     % How much full slots elapsed since last update?
     TimeSlots = sk_time_slotdiff(CurrentSkTime, {Time, MySkew}),
@@ -273,19 +273,19 @@ handle_schedule({_, _} = CurrentSkTime, {_, _} = _MaxSkTime, {Time, MySkew}, Val
     {ok, MyNewSkTime, NewValue};
 
 % Catch overflows
-handle_schedule({_, _} = _CurrentSkTime, {_, _} = MaxSkTime, {_, _} = SkTime, _Value, _MaxValue) when SkTime > MaxSkTime ->
+handle_schedule({_, _} = _CurrentSkTime, {_, _} = MaxSkTime, {_, _} = SkTime, _Value, _Burst) when SkTime > MaxSkTime ->
     % Cannot acces counter beyond given time range
     {error, overflow};
-handle_schedule({_, _} = _CurrentSkTime, {_, _} = MaxSkTime, {Time, MySkew}, Value, MaxValue)
-        when ({Time+1, MySkew} > MaxSkTime) andalso Value >= MaxValue ->
+handle_schedule({_, _} = _CurrentSkTime, {_, _} = MaxSkTime, {Time, MySkew}, Value, Burst)
+        when ({Time+1, MySkew} > MaxSkTime) andalso Value >= Burst ->
     % Counter is full at max time, unable to increment
     {error, overflow};
 
 % Here we are sure that we can schedule counter update
-handle_schedule({_, _} = _CurrentSkTime, {_, _} = _MaxSkTime, {_, _} = SkTime, Value, MaxValue) when Value < MaxValue ->
+handle_schedule({_, _} = _CurrentSkTime, {_, _} = _MaxSkTime, {_, _} = SkTime, Value, Burst) when Value < Burst ->
     % Counter time is up-to-date or in future, but we can increment Value at that time
     {ok, SkTime, Value + 1};
-handle_schedule({_, _} = _CurrentSkTime, {_, _} = _MaxSkTime, {Time, MySkew}, Value, _MaxValue) ->
+handle_schedule({_, _} = _CurrentSkTime, {_, _} = _MaxSkTime, {Time, MySkew}, Value, _Burst) ->
     % Counter time is up-to-date or in future, we cannot increment Value, so increment time
     {ok, {Time + 1, MySkew}, Value}.
 
