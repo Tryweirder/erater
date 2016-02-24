@@ -1,12 +1,12 @@
 -module(erater_config).
 -export([validate/1, clean/1]).
--export([nodes/1, driver/1, mode/1, rps/1, capacity/1, ttl/1, shards/1, default_wait/1]).
+-export([nodes/1, driver/1, mode/1, rps/1, burst/1, ttl/1, shards/1, default_wait/1]).
 
 -compile({no_auto_import, [nodes/1]}).
 
 validate(Config) when is_list(Config) ->
     true = is_number(rps(Config)),
-    true = is_integer(capacity(Config)),
+    true = is_integer(burst(Config)),
     DieAfter = ttl(Config),
     true = is_integer(DieAfter) orelse (DieAfter == infinity),
     Shards = shards(Config),
@@ -20,7 +20,7 @@ clean(Config) ->
         {driver, driver(Config)},
         {mode, mode(Config)},
         {rps, rps(Config)},
-        {capacity, capacity(Config)},
+        {burst, burst(Config)},
         {ttl, ttl(Config)},
         {shards, shards(Config)},
         {default_wait, default_wait(Config)}
@@ -58,15 +58,15 @@ default_mode(Driver) ->
 rps(Config) ->
     proplists:get_value(rps, Config, 1).
 
-capacity(Config) ->
-    proplists:get_value(capacity, Config, 1).
+burst(Config) ->
+    proplists:get_value(burst, Config, 1).
 
 ttl(Config) ->
     case proplists:get_value(ttl, Config) of
         TTL when is_integer(TTL) ->
             TTL;
         _ ->
-            ReplenishTime = round(1000 * capacity(Config) / rps(Config)),
+            ReplenishTime = round(1000 * burst(Config) / rps(Config)),
             ReplenishTime + 2000
     end.
 
